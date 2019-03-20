@@ -4,4 +4,4 @@ This is a project that I am doing to create board game themed words and phrases 
 
 # Database Setup
 
-The [database initialization scipt][/database/database.sql] will create the tables, view and stored procedures that I use to store and query boardgame data and various n-grams
+The [database initialization scipt](/database/database.sql) will create the tables, view and stored procedures that I use to store and query boardgame data and various n-grams
