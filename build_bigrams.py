@@ -5,26 +5,44 @@ from sqlalchemy import or_
 from sqlalchemy.orm.exc import NoResultFound
 from tqdm import tqdm
 from bggdb import BoardGame, Process, DescriptionWordBigram
-# from sqlalchemy.exc import DataError
+from toolkit import get_config
+from argparse import ArgumentParser, ArgumentTypeError  # https://docs.python.org/3.3/library/argparse.html
 
+def check_positive(value):
+    error = ArgumentTypeError("{} is not an integer greater than 0.".format(value))
 
-# Create a MariaDB database session
-sa_engine = create_engine('mysql+pymysql://bgg:it6jTeIN6sNldnJvMm3R@localhost:49000/boardgamegeek?charset=utf8mb4', pool_recycle=3600)
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise error
+
+    if ivalue < 0:
+        raise error
+    return ivalue
+
+parser = ArgumentParser(description='Process a number of stored games for bi-grams')
+parser.add_argument('--number', type=check_positive, default=20, help='Number of games to process for bi-grams')
+parser.add_argument('--config', type=str, default='config.json', help='Path to config')
+arguments = parser.parse_args()
+
+# Load configuration
+config_options = get_config(arguments.config)
+
+# Initialize database session
+sa_engine = create_engine(config_options['db_url'], pool_recycle=3600)
 session = Session(bind=sa_engine)
-
-# Set the scripts execution range of data
-maximum_games_to_process = 20
 
 for single_game in tqdm(
         session.query(BoardGame.id, BoardGame.description, Process.description_word_bigram).
         join(Process, isouter=True).
         filter(or_(Process.description_word_bigram == 0, Process.description_word_bigram.is_(None))).
-        limit(maximum_games_to_process),
+        limit(arguments.number),
         desc='Building n-grams',
-        total=maximum_games_to_process):
+        total=arguments.number):
 
     # Harvest bigrams from this games decription and add them to the table
     bigram_frequency_distribution = FreqDist(bigrams(word_tokenize(single_game.description)))
+    # https://stackoverflow.com/questions/32185072/nltk-word-tokenize-behaviour-for-double-quotation-marks-is-confusing
     # Process each bigram. If new, add it to the db else adjust its frequency
     for single_bigram, frequency in bigram_frequency_distribution.items():
         try:

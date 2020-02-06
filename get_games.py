@@ -1,4 +1,5 @@
 import requests
+from http import HTTPStatus
 import xml.etree.ElementTree as etree
 from time import sleep
 from html import unescape
@@ -8,9 +9,34 @@ from urllib.parse import urlencode
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import DataError
-from bggdb import BoardGame
 
-sa_engine = create_engine('mysql+pymysql://bgg:it6jTeIN6sNldnJvMm3R@localhost:49000/boardgamegeek?charset=utf8mb4', pool_recycle=3600)
+from bggdb import BoardGame
+from toolkit import get_config
+from argparse import ArgumentParser, ArgumentTypeError
+
+def check_positive(value):
+    arguement_error = ArgumentTypeError("{} is not an integer greater than 0.".format(value))
+
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise arguement_error
+
+    if ivalue < 0:
+        raise arguement_error
+    return ivalue
+
+parser = ArgumentParser(description='Add missing game details from BoardGameGeek to the local database')
+parser.add_argument('--idsperbatch', type=check_positive, default=8, help='Number of ids to check in one request')
+parser.add_argument('--totalbatches', type=check_positive, default=800, help='Total number of ids to check during execution')
+parser.add_argument('--config', type=str, default='config.json', help='Path to config')
+arguments = parser.parse_args()
+
+# Load configuration
+config_options = get_config(arguments.config)
+
+# Initialize database session
+sa_engine = create_engine(config_options['db_url'], pool_recycle=3600)
 session = Session(bind=sa_engine)
 # Base.metadata.create_all(sa_engine)
 
@@ -20,13 +46,11 @@ boardgamegeek_xml_api_url = 'http://www.boardgamegeek.com/xmlapi2/thing'
 
 # Figure out where we need to start from based on last know ID in database
 last_game_id = session.query(func.max(BoardGame.id)).scalar()
-simultaneous_id_request = 8
-bgg_id_check_passes = 800
-max_ids_to_query = simultaneous_id_request * bgg_id_check_passes
+max_ids_to_query = arguments.idsperbatch * arguments.totalbatches
 
-for game_index in tqdm(range(last_game_id + 1, last_game_id + max_ids_to_query + 1, simultaneous_id_request), desc="Gathering games", total=bgg_id_check_passes):
-    # Generate 'simultaneous_id_request' ids for this pass.
-    board_game_ids = ",".join(map(str, range(game_index, game_index + simultaneous_id_request)))
+for game_index in tqdm(range(last_game_id + 1, last_game_id + max_ids_to_query + 1, arguments.idsperbatch), desc="Gathering games", total=arguments.totalbatches):
+    # Generate 'arguments.idsperbatch' ids for this pass.
+    board_game_ids = ",".join(map(str, range(game_index, game_index + arguments.idsperbatch)))
     bgg_api_parameters = {
         'type': 'boardgame',
         'id': board_game_ids
@@ -38,7 +62,7 @@ for game_index in tqdm(range(last_game_id + 1, last_game_id + max_ids_to_query +
 
     bgg_response = requests.get(url=api_url)
 
-    if bgg_response.status_code == 200:
+    if bgg_response.status_code == HTTPStatus.OK:
         # Convert the feed into an Element object
         boardgames = etree.fromstring(bgg_response.content)
         # valid_ids = []
