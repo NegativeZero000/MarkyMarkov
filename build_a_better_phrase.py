@@ -32,7 +32,7 @@ class TokenPair:
         self.__word_count = 0
 
     def is_order_dependant(self):
-        return self.token == self.pair
+        return self.token != self.pair
 
     def raise_bias(self):
         self.current_bias += self.bias_adjust
@@ -88,7 +88,8 @@ class TokenPair:
 def adjust_frequency(
         tokens,
         known_token_pairs=[],
-        active_token_pair=None):
+        active_token_pair=TokenPair(None, None),
+        end_of_sentence_punctuation=['.', '?', '!']):
     '''
     Varying conditions can adjust the normal weight of words. Cycle through and adjust accordingly. If a character pair is encountered
 
@@ -98,21 +99,27 @@ def adjust_frequency(
     '''
 
     # print('Number of passed token pairs: {}'.format(len(token_pairs)))
-    # print('Live token pair: {}'.format(token_pairs[0]))
+    # print('Live token pair: {}'.format(token_pairs[0]))v
 
     # if(len(triggered_token_pairs) > 0 and triggered_token_pairs[0].pair in words_with_frequencies[0]):
 
     # Remove any order dependant pairs from the tokens list if we are not currently searching for that pair
-    print('Active token pair: {}'.format(active_token_pair))
-    banned_tokens = [tp.pair for tp in known_token_pairs if tp.pair != active_token_pair.pair]
-    print(banned_tokens)
+    # print('Active token pair: {}'.format(active_token_pair))
+    # print('Known:', known_token_pairs)
+    banned_tokens = [ktp.pair for ktp in known_token_pairs if ktp.is_order_dependant() and ktp.pair != active_token_pair.pair]
+    # print('Banned:', banned_tokens)
+
+    # If there is an active pair remove end of sentence punctuation
+    if active_token_pair.token is not None and active_token_pair.pair is not None:
+        banned_tokens += end_of_sentence_punctuation
+
     for token in tokens:
         if token[0] in banned_tokens:
-            # This token needs its weight removed to prevent it from being selected
+            # This token needs its weight removed to prevent it from being selected or influencing future weight calculations
             token[1] = 0
 
     # If there is a token pair active we need to change the weights of the pair if found.
-    if active_token_pair is not None:
+    if active_token_pair.token is not None and active_token_pair.pair is not None:
         # Transpose the list into word weight pairs.
         # tokens = list(map(list, zip(*tokens)))
 
@@ -120,18 +127,30 @@ def adjust_frequency(
         # Get the total sum of all weights
         # print("The tokens", tokens)
         # print([t[1] for t in tokens])
+        # print(active_token_pair)
+        # print(tokens)
+        # print('Token weight before: {}'.format([t[1] for t in tokens if t[0] == active_token_pair.pair]))
 
-        # Determine the weight that will need to be distributed among the found pairs
-        total_weight = sum([t[1] for t in tokens])
-        total_pairs = tokens[0].count(active_token_pair.pair)
+        # print(weight_to_distrubute)
 
-        # Adjust the weights assuming there is even any to adjust
-        if total_pairs > 0:
-            weight_to_distrubute = (active_token_pair.current_bias * total_weight) / total_pairs
+        # Check to see if the bias is at its higest value
+        if active_token_pair.current_bias < 1:
+            # Determine the weight that will need to be distributed to the found pair
+            total_weight = sum([t[1] for t in tokens])
 
+            # Adjust the weight
+            weight_to_distrubute = active_token_pair.current_bias * total_weight
+
+            # Adjust the weight of the pair
             for token in tokens:
                 if token[0] == active_token_pair.pair:
                     token[1] = weight_to_distrubute
+
+        elif active_token_pair.current_bias == 1 and active_token_pair.pair in [token[0] for token in tokens]:
+            # Bias is at 100%. Remove all other tokens in favour of the pair
+            tokens = [[active_token_pair.pair, 1]]
+
+        # print('Tokenactive_token_pair.current_bias weight after: {}'.format([t[1] for t in tokens if t[0] == active_token_pair.pair]))
 
     # Return the tokens regardless if edits were completed
     return tokens
@@ -139,7 +158,7 @@ def adjust_frequency(
 # Process command line arguments
 parser = ArgumentParser(description='Create sentence(s) based on bi-grams')
 parser.add_argument('--config', type=str, default='config.json', help='Config file name in script directory')
-parser.add_argument('--sentencecount', type=check_positive, default=2, help='Number of sentences to generate')
+parser.add_argument('--sentencecount', type=check_positive, default=3, help='Number of sentences to generate')
 parser.add_argument('--terminators', '--term', type=str, default='.?!', help='String of end-of-sentence characters')
 arguments = parser.parse_args()
 
@@ -158,13 +177,13 @@ detokenizer = MosesDetokenizer()
 destiny_pairs = [
     TokenPair(token='(', pair=')'),
     TokenPair(token='\'', pair='\''),
-    TokenPair(token='"', pair='"')
+    TokenPair(token='"', pair='"'),
+    TokenPair(token='[', pair=']'),
 ]
 triggered_token_pairs = []
 
 # Get the first word in the sentence by selecting a bigram use end of sentence punctuation
 current_token = choices([row.second for row in session.query(DescriptionWordBigram.second).filter(DescriptionWordBigram.first.in_(end_of_sentence_punctuation)).all()])[0]
-current_token = 'Abacus'
 
 # Continue to make sentences until the count is met
 while sentence_index < arguments.sentencecount:
@@ -191,7 +210,7 @@ while sentence_index < arguments.sentencecount:
         # Adjust the words/token respective weights where required. Primarily based son the presense of destiny pairs.
         words_with_frequencies = adjust_frequency(
             tokens=[[t.second, t.frequency] for t in next_tokens],
-            active_token_pair=next(iter(triggered_token_pairs), None),
+            active_token_pair=next(iter(triggered_token_pairs), TokenPair(None, None)),
             known_token_pairs=destiny_pairs
         )
         # print('Number of token pairs: {}'.format(len(triggered_token_pairs)))
